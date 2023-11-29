@@ -1,9 +1,12 @@
 package com.indivaragroup.bpi.vybe.awsgateway.util;
 
+import com.amazonaws.regions.Regions;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
+import java.io.ByteArrayOutputStream;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.fileupload.MultipartStream;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.*;
@@ -15,12 +18,18 @@ import org.apache.http.entity.mime.content.ByteArrayBody;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
+import org.apache.commons.codec.binary.Base64;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.ObjectMetadata;
 import java.util.Map;
 import org.apache.http.client.methods.HttpPost;
 
@@ -108,12 +117,76 @@ public class HttpUtils {
 
                     log.info("entity :{}", entity);
                 } else {
+
+                    //===============================upload to s3===================================//
+                    log.info("this is image : " + requestBody);
+                    String contentType = "";
+                    //Change these values to fit your region and bucket name
+                    Regions clientRegion = Regions.AP_SOUTHEAST_1;
+                    String bucketName = "bpi-woi-revamp-sit";
+                    String fileObjKeyName = "image.jpg";
+
+                    byte[] binaryContent = Base64.decodeBase64(requestBody.getBytes());
+                    if (headers != null) {
+                        contentType = headers.get("Content-Type");
+                    }
+                    //Extract the boundary
+                    String[] boundaryArray = contentType.split("=");
+                    //Transform the boundary to a byte array
+                    byte[] boundary = boundaryArray[1].getBytes();
+
+                    //Log the extraction for verification purposes
+                    log.info(new String(binaryContent, "UTF-8") + "\n");
+
+                    //Create a ByteArrayInputStream
+                    ByteArrayInputStream content = new ByteArrayInputStream(binaryContent);
+                    //Create a MultipartStream to process the form-data
+                    MultipartStream multipartStream = new MultipartStream(content, boundary, binaryContent.length, null);
+                    //Create a ByteArrayOutputStream
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    //Find first boundary in the MultipartStream
+                    boolean nextPart = multipartStream.skipPreamble();
+
+                    //Loop through each segment
+                    while (nextPart)
+                    {
+                        String header = multipartStream.readHeaders();
+
+                        //Log header for debugging
+                        log.info("Headers:");
+                        log.info(header);
+
+                        //Write out the file to our ByteArrayOutputStream
+                        multipartStream.readBodyData(out);
+
+                        //Get the next part, if any
+                        nextPart = multipartStream.readBoundary();
+
+                    }
+                    //Log completion of MultipartStream processing
+                    log.info("Data written to ByteStream");
+                    //Prepare an InputStream from the ByteArrayOutputStream
+                    InputStream fis = new ByteArrayInputStream(out.toByteArray());
+
+                    AmazonS3 s3Client = AmazonS3ClientBuilder.standard()
+                            .withRegion(clientRegion)
+                            .build();
+
+                    //Configure the file metadata
+                    ObjectMetadata metadata = new ObjectMetadata();
+                    metadata.setContentLength(out.toByteArray().length);
+                    metadata.setContentType("image/jpeg");
+                    metadata.setCacheControl("public, max-age=31536000");
+
+                    //Put file into S3
+                    s3Client.putObject(bucketName, fileObjKeyName, fis, metadata);
+                    //==================================================================//
+
                     log.info("this is image");
                     MultipartEntityBuilder builder = MultipartEntityBuilder.create();
-                    byte[] binaryContent = requestBody.getBytes();
                     builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
-                    builder.addPart("file", new ByteArrayBody(binaryContent, ContentType.create("image/jpeg"), "file"));
-                    //builder.addBinaryBody("file", requestBody.getBytes());
+                    // Add the entire original multipart content to the new builder
+                    builder.addBinaryBody("file", requestBody.getBytes());
 
                     // Build the new multipart entity
                     HttpEntity multipartEntity = builder.build();
@@ -131,6 +204,8 @@ public class HttpUtils {
             responseEvent.setBody(responseBody);
         } catch (IOException e) {
             // Handle exceptions here
+            return createErrorResponse(500, "500", e.getMessage());
+        } catch (Exception e) {
             return createErrorResponse(500, "500", e.getMessage());
         }
 
