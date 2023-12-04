@@ -186,7 +186,7 @@ public class HttpUtils {
                     MultipartEntityBuilder builder = MultipartEntityBuilder.create();
                     builder.setMode(HttpMultipartMode.BROWSER_COMPATIBLE);
                     // Add the entire original multipart content to the new builder
-                    builder.addBinaryBody("file", requestBody.getBytes());
+                    builder.addBinaryBody("file", fis.readAllBytes());
 
                     // Build the new multipart entity
                     HttpEntity multipartEntity = builder.build();
